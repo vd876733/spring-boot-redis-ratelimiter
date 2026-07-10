@@ -24,17 +24,33 @@ public class RateLimiterFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
 
-        // Extract client identifier securely considering reverse proxies
-        String clientId = request.getHeader("X-Forwarded-For");
-        if (clientId == null || clientId.trim().isEmpty()) {
-            clientId = request.getRemoteAddr();
+        // Determine the client identifier
+        String clientId;
+        String authHeader = request.getHeader("Authorization");
+        boolean isPremium = false;
+
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            // Extract the token (API Key or JWT) to use as the unique rate limit key
+            clientId = authHeader.substring(7).trim();
+            if (clientId.startsWith("premium_")) {
+                isPremium = true;
+            }
         } else {
-            // X-Forwarded-For can contain multiple IP addresses, the first one is the client
-            clientId = clientId.split(",")[0].trim();
+            // Fall back to extracting the IP address securely considering reverse proxies
+            clientId = request.getHeader("X-Forwarded-For");
+            if (clientId == null || clientId.trim().isEmpty()) {
+                clientId = request.getRemoteAddr();
+            } else {
+                // X-Forwarded-For can contain multiple IP addresses, the first one is the client
+                clientId = clientId.split(",")[0].trim();
+            }
         }
 
+        // Determine the limit tier
+        int limit = isPremium ? RateLimiterService.Tier.PREMIUM.getLimit() : RateLimiterService.Tier.FREE.getLimit();
+
         // Check rate limit and get response data
-        RateLimiterService.RateLimitResponse rateLimitResponse = rateLimiterService.checkRateLimit(clientId);
+        RateLimiterService.RateLimitResponse rateLimitResponse = rateLimiterService.checkRateLimit(clientId, limit);
 
         // Append standard rate limiting headers
         response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitResponse.limit));
