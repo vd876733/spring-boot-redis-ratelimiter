@@ -1,7 +1,8 @@
-version: '3.8'
 services:
   redis:
     image: redis:latest
     container_name: redis_ratelimiter
+    platform: linux/arm64
+    command: redis-server --ignore-warnings ARM64-COW-BUG
     ports:
       - "6379:6379"

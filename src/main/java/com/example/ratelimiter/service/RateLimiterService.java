@@ -15,7 +15,7 @@ public class RateLimiterService {
     private static final Logger log = LoggerFactory.getLogger(RateLimiterService.class);
 
     private final StringRedisTemplate redisTemplate;
-    private final RedisScript<List> rateLimitScript;
+    private final RedisScript<String> rateLimitScript;
 
     private static final long WINDOW_SIZE_MS = 60000; // 1 minute window
 
@@ -71,9 +71,9 @@ public class RateLimiterService {
             "    remaining = remaining - 1\n" +
             "end\n" +
             "if remaining < 0 then remaining = 0 end\n" +
-            "return { allowed, math.floor(remaining) }";
+            "return tostring(allowed) .. ',' .. tostring(math.floor(remaining))";
             
-        this.rateLimitScript = new DefaultRedisScript<>(luaScript, List.class);
+        this.rateLimitScript = new DefaultRedisScript<>(luaScript, String.class);
     }
 
     public RateLimitResponse checkRateLimit(String clientId, int limit) {
@@ -90,22 +90,28 @@ public class RateLimiterService {
 
         try {
             // Execute Lua script for atomic sliding window rate limiting
-            List<Long> result = (List<Long>) redisTemplate.execute(
+            String result = (String) redisTemplate.execute(
                     rateLimitScript,
                     List.of(currentKey, previousKey),
                     String.valueOf(limit),
                     String.valueOf(previousWindowWeight)
             );
 
-            boolean allowed = result != null && !result.isEmpty() && result.get(0) == 1L;
-            long remaining = (result != null && result.size() > 1) ? result.get(1) : 0L;
+            boolean allowed = false;
+            long remaining = 0;
+            if (result != null && result.contains(",")) {
+                String[] parts = result.split(",");
+                allowed = "1".equals(parts[0]);
+                remaining = Long.parseLong(parts[1]);
+            }
+            
             long resetInSeconds = ((currentWindowStart + WINDOW_SIZE_MS) - now) / 1000;
 
             return new RateLimitResponse(allowed, remaining, resetInSeconds, limit);
         } catch (Exception e) {
             log.warn("Redis unavailable for rate limiting, failing gracefully: {}", e.getMessage());
             // Fail open: immediately return true (allowing the request through)
-            return new RateLimitResponse(true, limit, 0, limit);
+            return new RateLimitResponse(true, limit, limit, limit);
         }
     }
 }
